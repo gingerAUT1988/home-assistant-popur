@@ -1,0 +1,13 @@
+{
+  "domain": "popur",
+  "name": "Popur X5",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/gingerAUT1988/home-assistant-popur",
+  "requirements": [
+    "paho-mqtt",
+    "requests"
+  ],
+  "iot_class": "cloud_polling",
+  "version": "1.0.0"
+}
