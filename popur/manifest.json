@@ -1,0 +1,10 @@
+{
+  "domain": "popur",
+  "name": "Popur X5 Litter Box",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/gingerAUT1988/home-assistant-popur-x5",
+  "requirements": ["paho-mqtt", "requests"],
+  "iot_class": "cloud_polling",
+  "version": "1.0.0"
+}
