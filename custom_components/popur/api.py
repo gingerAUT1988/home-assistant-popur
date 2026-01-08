@@ -9,13 +9,27 @@ import logging
 _LOGGER = logging.getLogger(__name__)
 
 class PopurApi:
-    def __init__(self, email, password):
+def __init__(self, email, password):
         self.email = email
-        # Store the hash, not the plaintext
-        self.password_hash = hashlib.md5(password.encode()).hexdigest()
+        
+        # SMART LOGIC: 
+        # 1. Check if the input is ALREADY an MD5 hash (32 hex characters)
+        # 2. If yes, use it directly. If no, hash it.
+        clean_pass = password.strip() # Remove accidental spaces
+        
+        is_hash = (len(clean_pass) == 32 and all(c in '0123456789abcdefABCDEF' for c in clean_pass))
+        
+        if is_hash:
+            _LOGGER.info("Popur: Detected MD5 hash provided directly.")
+            self.password_hash = clean_pass
+        else:
+            _LOGGER.info("Popur: Hashing plain-text password.")
+            self.password_hash = hashlib.md5(clean_pass.encode()).hexdigest()
+            
         self.token = None
         self.user_id = None
         self.home_id = None
+        self.devices = []
 
     def login(self):
         """Login to Popur Cloud"""
