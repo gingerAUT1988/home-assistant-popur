@@ -24,8 +24,7 @@ Since Popur does not provide a local API, this integration communicates with the
     *   Toggle "Manual Mode" (used for Do Not Disturb/Night Mode).
 *   **Sensors:**
     *   **Bin Full:** Binary sensor indicating when the waste bin needs emptying.
-    *   **Cycles:** Tracks the number of cleaning cycles since the bin was last emptied.
-    *   **Total Cycles:** Lifetime cycle count.
+    *   **Cycles:** Tracks the number of daily cleaning cycles (Recommendation: Use Home Assistant 'Utility Meter' Helpers to track daily usage locally, as the device's internal counters may reset based on China Standard Time.) 
 *   **Easy Setup:** Fully configurable via the Home Assistant UI (Config Flow). No YAML editing required for connection.
 
 ## 📥 Installation
