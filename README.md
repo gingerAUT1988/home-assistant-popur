@@ -234,10 +234,6 @@ cards:
                 icon: mdi:delete-variant
                 color: grey
                 vertical: true
-grid_options:
-  columns: 48
-  rows: auto
-
 ```
 ## ☕ Support
 This integration was reverse-engineered. If it helps you keep your cats happy and your house clean, feel free to say thanks!
