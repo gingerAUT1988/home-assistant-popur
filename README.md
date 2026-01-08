@@ -1,7 +1,7 @@
-# Popur X5 Litter Box Integration for Home Assistant
+# Popur Litter Box Integration for Home Assistant
 
 <p align="center">
-  <img src="images/icon.png" width="150" height="150" alt="Popur X5 Logo">
+  <img src="images/icon.png" width="150" height="150" alt="Popur Logo">
 </p>
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
