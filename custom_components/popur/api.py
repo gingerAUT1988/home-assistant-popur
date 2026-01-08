@@ -10,14 +10,12 @@ _LOGGER = logging.getLogger(__name__)
 
 class PopurApi:
     def __init__(self, email, password):
-        self.email = email
+        self.email = email.strip()
         
-        # SMART LOGIN LOGIC:
-        # 1. Clean up input (remove accidental spaces)
+        # 1. Clean input
         clean_pass = password.strip()
         
-        # 2. Check if it is ALREADY an MD5 hash (32 hex characters)
-        # Allows you to paste the hash directly if special chars cause issues.
+        # 2. Check if it is ALREADY a Hash
         is_hash = (len(clean_pass) == 32 and all(c in '0123456789abcdefABCDEF' for c in clean_pass))
         
         if is_hash:
@@ -40,9 +38,13 @@ class PopurApi:
         try:
             resp = requests.post(url, json=payload, headers=headers, timeout=10)
             data = resp.json()
+            
             if data.get('code') == 200:
                 self.token = data['data']['token']
-                self.home_id = data['data']['defaulthomeid']
+                # FIX: These fields are nested inside 'user' dictionary
+                user_data = data['data'].get('user', {})
+                self.user_id = user_data.get('_id')
+                self.home_id = user_data.get('defaulthomeid')
                 return True
             else:
                 _LOGGER.error(f"Popur Login Failed: {data}")
@@ -53,7 +55,7 @@ class PopurApi:
     def get_devices(self):
         """Get list of toilets"""
         if not self.token: self.login()
-        if not self.token: return [] # Stop if login failed
+        if not self.token or not self.home_id: return [] 
         
         url = f"https://cloud.popur.com.cn/uapi/home_details/{self.home_id}"
         headers = {"Authorization": f"Bearer {self.token}", "User-Agent": "com.cloudapp.popur.app"}
