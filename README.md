@@ -114,27 +114,40 @@ Here is a clean, compact Lovelace card configuration using standard Tile cards a
 ```yaml
 type: vertical-stack
 cards:
-  # --- ALERTS ---
   - type: conditional
     conditions:
-      - entity: binary_sensor.popur_klo_bin_full
+      - entity: binary_sensor.bin_full_2
         state: "on"
     card:
       type: tile
-      entity: binary_sensor.popur_klo_bin_full
-      name: Bin is FULL!
+      entity: binary_sensor.bin_full_2
+      name: Klo is FULL!
       color: red
       icon: mdi:delete-alert
-
-  # --- HISTORY GRAPH ---
+  - type: conditional
+    conditions:
+      - entity: binary_sensor.bin_full
+        state: "on"
+    card:
+      type: tile
+      entity: binary_sensor.bin_full
+      name: Bad is FULL!
+      color: red
+      icon: mdi:delete-alert
   - type: history-graph
-    title: Usage (Cycles)
+    title: Usage
     hours_to_show: 24
+    refresh_interval: 60
     entities:
-      - entity: sensor.popur_klo_cycles
-        name: Klo Cycles
-
-  # --- CONTROLS ---
+      - entity: sensor.cycles_2
+        name: Klo
+      - entity: sensor.cycles
+        name: Bad
+  - type: tile
+    entity: schedule.popur_quiet_hours
+    name: Quiet Hours (Tap to Edit)
+    icon: mdi:clock-time-eight-outline
+    color: indigo
   - type: grid
     columns: 2
     square: false
@@ -142,42 +155,89 @@ cards:
       - type: vertical-stack
         cards:
           - type: heading
-            heading: Popur Klo
+            heading: Klo
             icon: mdi:cat
+          - type: tile
+            entity: button.clean_2
+            name: Clean Now
+            icon: mdi:robot-vacuum
+            color: teal
+            vertical: false
+            tap_action:
+              action: press
           - type: grid
             columns: 2
             square: false
             cards:
-              # Info Tile
               - type: tile
-                entity: sensor.popur_klo_cycles
-                name: Cycles
+                entity: sensor.klo_daily
+                name: Today
                 icon: mdi:counter
                 color: light-blue
-                vertical: false
-              # Clean Button
+                vertical: true
               - type: tile
-                entity: button.popur_klo_clean
-                name: Clean
-                icon: mdi:robot-vacuum
-                color: teal
-                vertical: false
-                tap_action:
-                  action: press
-              # Night Mode Status
+                entity: input_boolean.popur_klo_dnd_enabled
+                name: Auto Night
+                icon: mdi:weather-night
+                color: deep-purple
+                vertical: true
               - type: tile
-                entity: schedule.popur_quiet_hours
-                name: Schedule
-                icon: mdi:clock-time-eight-outline
-                color: indigo
-                vertical: false
-              # Manual Mode Switch
-              - type: tile
-                entity: switch.popur_klo_manual_mode
+                entity: switch.manual_mode_2
                 name: DND Mode
                 icon: mdi:volume-off
                 color: orange
-                vertical: false
+                vertical: true
+              - type: tile
+                entity: sensor.cycles_2
+                name: Bin Cycles
+                icon: mdi:delete-variant
+                color: grey
+                vertical: true
+      - type: vertical-stack
+        cards:
+          - type: heading
+            heading: Bad
+            icon: mdi:cat
+          - type: tile
+            entity: button.clean
+            name: Clean Now
+            icon: mdi:robot-vacuum
+            color: teal
+            vertical: false
+            tap_action:
+              action: press
+          - type: grid
+            columns: 2
+            square: false
+            cards:
+              - type: tile
+                entity: sensor.bad_daily
+                name: Today
+                icon: mdi:counter
+                color: light-blue
+                vertical: true
+              - type: tile
+                entity: input_boolean.popur_bad_dnd_enabled
+                name: Auto Night
+                icon: mdi:weather-night
+                color: deep-purple
+                vertical: true
+              - type: tile
+                entity: switch.manual_mode
+                name: DND Mode
+                icon: mdi:volume-off
+                color: orange
+                vertical: true
+              - type: tile
+                entity: sensor.cycles
+                name: Bin Cycles
+                icon: mdi:delete-variant
+                color: grey
+                vertical: true
+grid_options:
+  columns: 48
+  rows: auto
+
 ```
 ## ☕ Support
 This integration was reverse-engineered. If it helps you keep your cats happy and your house clean, feel free to say thanks!
