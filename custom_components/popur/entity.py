@@ -8,6 +8,9 @@ class PopurEntity(CoordinatorEntity):
         super().__init__(coordinator)
         self.device = device
         self._device_id = device["devid"]
+        
+        self._attr_has_entity_name = True
+        
         self._attr_device_info = {
             "identifiers": {(DOMAIN, self._device_id)},
             "name": device["name"],
