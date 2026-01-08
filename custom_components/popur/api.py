@@ -9,14 +9,15 @@ import logging
 _LOGGER = logging.getLogger(__name__)
 
 class PopurApi:
-def __init__(self, email, password):
+    def __init__(self, email, password):
         self.email = email
         
-        # SMART LOGIC: 
-        # 1. Check if the input is ALREADY an MD5 hash (32 hex characters)
-        # 2. If yes, use it directly. If no, hash it.
-        clean_pass = password.strip() # Remove accidental spaces
+        # SMART LOGIN LOGIC:
+        # 1. Clean up input (remove accidental spaces)
+        clean_pass = password.strip()
         
+        # 2. Check if it is ALREADY an MD5 hash (32 hex characters)
+        # Allows you to paste the hash directly if special chars cause issues.
         is_hash = (len(clean_pass) == 32 and all(c in '0123456789abcdefABCDEF' for c in clean_pass))
         
         if is_hash:
@@ -29,7 +30,6 @@ def __init__(self, email, password):
         self.token = None
         self.user_id = None
         self.home_id = None
-        self.devices = []
 
     def login(self):
         """Login to Popur Cloud"""
@@ -44,13 +44,17 @@ def __init__(self, email, password):
                 self.token = data['data']['token']
                 self.home_id = data['data']['defaulthomeid']
                 return True
+            else:
+                _LOGGER.error(f"Popur Login Failed: {data}")
         except Exception as e:
-            _LOGGER.error(f"Login error: {e}")
+            _LOGGER.error(f"Popur Connection Error: {e}")
         return False
 
     def get_devices(self):
         """Get list of toilets"""
         if not self.token: self.login()
+        if not self.token: return [] # Stop if login failed
+        
         url = f"https://cloud.popur.com.cn/uapi/home_details/{self.home_id}"
         headers = {"Authorization": f"Bearer {self.token}", "User-Agent": "com.cloudapp.popur.app"}
         
@@ -65,12 +69,15 @@ def __init__(self, email, password):
     def get_device_status(self, device_id):
         """Get status of a specific toilet"""
         if not self.token: self.login()
+        if not self.token: return None
+
         url = f"https://cloud.popur.com.cn/uapi/deviceinfo/info/{device_id}"
         headers = {"Authorization": f"Bearer {self.token}", "User-Agent": "com.cloudapp.popur.app"}
         
         try:
             resp = requests.get(url, headers=headers, timeout=10)
-            data = resp.json()['data']
+            data = resp.json().get('data', {})
+            
             return {
                 "bin_full": True if data.get('rubbish') == 2 else False,
                 "cycles": data.get('worknum', 0),
@@ -105,7 +112,7 @@ def __init__(self, email, password):
             client.tls_set_context(context=ssl.create_default_context())
             client.connect(broker, 443, 60)
             client.publish(topic, json.dumps(payload))
-            time.sleep(0.5) # Allow time to send
+            time.sleep(0.5) 
             client.disconnect()
         except Exception as e:
             _LOGGER.error(f"MQTT Error: {e}")
