@@ -14,8 +14,6 @@ A custom component to integrate the **Popur X5 Self-Cleaning Litter Box** into H
 
 Since Popur does not provide a local API, this integration communicates with the Popur Cloud via MQTT and HTTP to fetch status updates and send commands.
 
-<img src="https://user-images.githubusercontent.com/placeholder_dashboard.png" width="600" alt="Dashboard Screenshot">
-
 ## 🐱 Features
 
 *   **Multi-Device Support:** Automatically discovers all Popur X5 devices on your account.
