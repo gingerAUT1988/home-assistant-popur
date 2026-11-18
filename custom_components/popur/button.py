@@ -1,4 +1,6 @@
 from homeassistant.components.button import ButtonEntity
+from homeassistant.exceptions import HomeAssistantError
+from .api import PopurCommandError
 from .const import DOMAIN
 from .entity import PopurEntity
 
@@ -18,4 +20,7 @@ class PopurCleanButton(PopurEntity, ButtonEntity):
         self._attr_icon = "mdi:robot-vacuum"
 
     async def async_press(self):
-        await self.hass.async_add_executor_job(self.coordinator.api.send_command, self._device_id, "clean")
+        try:
+            await self.hass.async_add_executor_job(self.coordinator.api.send_command, self._device_id, "clean")
+        except PopurCommandError as err:
+            raise HomeAssistantError(str(err)) from err

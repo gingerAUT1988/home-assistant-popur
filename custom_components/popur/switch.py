@@ -1,4 +1,6 @@
 from homeassistant.components.switch import SwitchEntity
+from homeassistant.exceptions import HomeAssistantError
+from .api import PopurCommandError
 from .const import DOMAIN
 from .entity import PopurEntity
 
@@ -22,9 +24,14 @@ class PopurManualSwitch(PopurEntity, SwitchEntity):
         return self.coordinator.data.get(self._device_id, {}).get("manual_mode")
 
     async def async_turn_on(self, **kwargs):
-        await self.hass.async_add_executor_job(self.coordinator.api.send_command, self._device_id, "manual_mode", True)
-        await self.coordinator.async_request_refresh()
+        await self._set(True)
 
     async def async_turn_off(self, **kwargs):
-        await self.hass.async_add_executor_job(self.coordinator.api.send_command, self._device_id, "manual_mode", False)
+        await self._set(False)
+
+    async def _set(self, value):
+        try:
+            await self.hass.async_add_executor_job(self.coordinator.api.send_command, self._device_id, "manual_mode", value)
+        except PopurCommandError as err:
+            raise HomeAssistantError(str(err)) from err
         await self.coordinator.async_request_refresh()
