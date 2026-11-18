@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,6 +13,7 @@ _spec.loader.exec_module(api_mod)
 class FakeClient:
     def __init__(self, *args, **kwargs):
         self.paths = []
+        self.published = []
 
     def ws_set_options(self, path, headers):
         self.paths.append(path)
@@ -19,6 +21,10 @@ class FakeClient:
     def tls_set_context(self, context): pass
     def reconnect_delay_set(self, **kwargs): pass
     def subscribe(self, topic): pass
+
+    def publish(self, topic, data):
+        self.published.append((topic, json.loads(data)))
+
     def connect_async(self, *args, **kwargs): pass
     def loop_start(self): pass
 
@@ -85,3 +91,21 @@ def test_connect_reports_up(monkeypatch):
     api, client, clock, logins, events = make_api(monkeypatch)
     client.on_connect(client, None, None, rc(0, failure=False), None)
     assert events == ["up"]
+
+
+def test_connect_requests_status_and_info(monkeypatch):
+    api, client, clock, logins, events = make_api(monkeypatch)
+    client.on_connect(client, None, None, rc(0, failure=False), None)
+    assert len(client.published) == 2
+    (props_topic, props), (info_topic, info) = client.published
+    assert props_topic == "devcrpc/attr/dev1" and props["method"] == "get_properties"
+    assert props["params"] == [{"did": "0", "sid": 2, "pid": pid} for pid in (1, 2, 8, 11, 6)]
+    assert info_topic == "devcrpc/info/dev1" and info["method"] == "aithingsIO.info"
+    assert info["params"] == {}
+    assert props["id"] >= 100_000 and info["id"] >= 100_000 and props["id"] != info["id"]
+
+
+def test_refused_connect_publishes_nothing(monkeypatch):
+    api, client, clock, logins, events = make_api(monkeypatch)
+    client.on_connect(client, None, None, rc(135), None)
+    assert client.published == []

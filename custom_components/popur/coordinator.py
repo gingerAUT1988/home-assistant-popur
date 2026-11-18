@@ -25,6 +25,9 @@ class PopurCoordinator(DataUpdateCoordinator):
             for dev_id in self.devices_map:
                 status = await self.hass.async_add_executor_job(self.api.get_device_status, dev_id)
                 if status:
+                    # pid 2 comes only by push.
+                    if "status" in (previous := (self.data or {}).get(dev_id, {})):
+                        status.setdefault("status", previous["status"])
                     data[dev_id] = status
         
             for dev_id, changed in self.push_overlay.items():

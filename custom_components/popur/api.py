@@ -18,6 +18,8 @@ _RELOGIN_AFTER_AUTH_REFUSED = 60
 _RELOGIN_AFTER_OTHER_FAILURE = 15 * 60
 # Seconds to wait for the device's reply to a command.
 COMMAND_TIMEOUT = 5
+# Minimum seconds between two commands. A burst of commands makes the device stop answering and go offline.
+COMMAND_GAP = 1
 # False: a missing reply only logs a warning. Set to True when live tests show that the
 # device replies to our own action and set_properties commands.
 REQUIRE_COMMAND_REPLY = False
@@ -66,6 +68,9 @@ class PopurApi:
         self._ids = itertools.count(random.randint(100_000, 900_000))
         self._pending = {}
         self._pending_lock = threading.Lock()
+        self._command_lock = threading.RLock()
+        self._last_command = 0.0
+        self._latest_write = {}
 
     def login(self):
         """Login to Popur Cloud. Thread-safe: the poll, commands and the MQTT thread can call it."""
@@ -127,7 +132,14 @@ class PopurApi:
                 "cycles": data.get('worknum', 0),
                 "total_cycles": data.get('lastworknum', 0),
                 "manual_mode": True if str(data.get('manualmode')) == "1" else False,
-                "online": True if str(data.get('isonline')) == "1" else False
+                "online": True if str(data.get('isonline')) == "1" else False,
+                "curious_cat": str(data.get('sound')) == "1",
+                "dnd": str(data.get('sleepmode')) == "1",
+                "wait_time": data.get('counttime'),
+                "leveling": data.get('cleanmode'),
+                "display": data.get('skinstate'),
+                "dnd_start": data.get('sleepstarttime'),
+                "dnd_end": data.get('sleependtime'),
             }
         except Exception as e:
             _LOGGER.error(f"Status fetch error: {e}")
@@ -158,6 +170,11 @@ class PopurApi:
                 return
             for device_id in device_ids:
                 client.subscribe(f"+/+/{device_id}")
+            for device_id in device_ids:
+                # HTTP has no field for pid 2. Never read sid 1; keep the app's 5-pid batch (PROTOCOL.md 1.4, 2.4).
+                client.publish(f"devcrpc/attr/{device_id}", json.dumps({"id": next(self._ids), "method": "get_properties", "from": "remote",
+                    "params": [{"did": "0", "sid": 2, "pid": pid} for pid in (1, 2, 8, 11, 6)]}))
+                client.publish(f"devcrpc/info/{device_id}", json.dumps({"id": next(self._ids), "method": "aithingsIO.info", "from": "remote", "params": {}}))
             if on_connected:
                 on_connected()
 
@@ -208,9 +225,9 @@ class PopurApi:
 
     def _handle_reply(self, topic, payload):
         """Record the result of a pending command. Runs in the paho thread."""
-        if not isinstance(payload, dict) or not topic.startswith(("devsrpc/action/", "devsrpc/attr/")):
+        if not isinstance(payload, dict) or not topic.startswith(("devsrpc/action/", "devsrpc/attr/", "devsrpc/event/")):
             return
-        if payload.get("method") not in ("action", "set_properties"):
+        if payload.get("method") not in ("action", "set_properties", "aithingsIO.reboot"):
             return
         with self._pending_lock:
             pending = self._pending.get(payload.get("id"))
@@ -219,6 +236,15 @@ class PopurApi:
             pending["event"].set()
 
     def send_command(self, device_id, cmd_type, value=None):
+        """Send one command at a time, at least COMMAND_GAP s apart. See _send_command."""
+        with self._command_lock:
+            time.sleep(max(0, self._last_command + COMMAND_GAP - time.monotonic()))
+            try:
+                return self._send_command(device_id, cmd_type, value)
+            finally:
+                self._last_command = time.monotonic()
+
+    def _send_command(self, device_id, cmd_type, value=None):
         """Send a command on the push connection and wait for the device's reply.
 
         Raises PopurCommandError when push is not connected, the publish fails, or the
@@ -231,6 +257,13 @@ class PopurApi:
         elif cmd_type == "manual_mode":
             topic = f"devcrpc/attr/{device_id}"
             payload = {"id": msg_id, "method": "set_properties", "from": "remote", "params": [{"did": "0", "pid": 3, "sid": 2, "value": 1 if value else 0}]}
+        elif cmd_type == "set_property":
+            pid, value = value
+            topic = f"devcrpc/attr/{device_id}"
+            payload = {"id": msg_id, "method": "set_properties", "from": "remote", "params": [{"did": "0", "pid": pid, "sid": 2, "value": value}]}
+        elif cmd_type == "reboot":
+            topic = f"devcrpc/event/{device_id}"
+            payload = {"id": msg_id, "method": "aithingsIO.reboot", "from": "remote", "params": [{"did": "0"}]}
         else:
             raise ValueError(f"Unknown command: {cmd_type}")
 
@@ -257,3 +290,15 @@ class PopurApi:
         if pending["code"] not in (0, None):
             raise PopurCommandError(f"The device rejected the {cmd_type} command (code {pending['code']}).")
         _LOGGER.debug(f"Popur: {cmd_type} command id {msg_id} confirmed")
+
+    def set_property(self, device_id, pid, value):
+        """Write one sid 2 property and wait for the device's reply. Raises PopurCommandError.
+
+        A write that a newer write of the same property replaces while it waits in the queue is not sent.
+        """
+        key, token = (device_id, pid), object()
+        self._latest_write[key] = token
+        with self._command_lock:
+            if self._latest_write.get(key) is not token:
+                return
+            self.send_command(device_id, "set_property", (pid, value))

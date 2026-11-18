@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -31,6 +33,7 @@ class FakePush:
 
 def make_api(monkeypatch, **kwargs):
     monkeypatch.setattr(api_mod, "COMMAND_TIMEOUT", 0.05)
+    monkeypatch.setattr(api_mod, "COMMAND_GAP", 0)
     api = api_mod.PopurApi("a@b.c", "pw")
     api._push = FakePush(api, **kwargs)
     return api
@@ -109,3 +112,93 @@ def test_ids_are_unique(monkeypatch):
     api.send_command("dev1", "clean")
     ids = [m["id"] for _, m in api._push.sent]
     assert ids[0] != ids[1] and ids[0] >= 100_000
+
+
+def reboot_reply(code):
+    return lambda topic, msg: ("devsrpc/event/dev1", {"id": msg["id"], "method": "aithingsIO.reboot",
+        "params": [{"code": code}]})
+
+
+def test_set_property_confirmed(monkeypatch):
+    api = make_api(monkeypatch, reply=set_reply(0))
+    api.set_property("dev1", 4, 1)
+    topic, msg = api._push.sent[0]
+    assert topic == "devcrpc/attr/dev1"
+    assert msg["method"] == "set_properties"
+    assert msg["params"] == [{"did": "0", "pid": 4, "sid": 2, "value": 1}]
+    assert api._pending == {}
+
+
+def test_set_property_rejected_raises(monkeypatch):
+    api = make_api(monkeypatch, reply=set_reply(-4))
+    with pytest.raises(api_mod.PopurCommandError, match="code -4"):
+        api.set_property("dev1", 4, 1)
+
+
+def test_set_property_string_value(monkeypatch):
+    api = make_api(monkeypatch, reply=set_reply(0))
+    api.set_property("dev1", 14, "22:00")
+    assert api._push.sent[0][1]["params"] == [{"did": "0", "pid": 14, "sid": 2, "value": "22:00"}]
+
+
+def test_reboot_confirmed(monkeypatch):
+    api = make_api(monkeypatch, reply=reboot_reply(0))
+    api.send_command("dev1", "reboot")
+    topic, msg = api._push.sent[0]
+    assert topic == "devcrpc/event/dev1"
+    assert msg["method"] == "aithingsIO.reboot"
+    assert msg["params"] == [{"did": "0"}]
+    assert api._pending == {}
+
+
+def test_reboot_rejected_raises(monkeypatch):
+    api = make_api(monkeypatch, reply=reboot_reply(-1))
+    with pytest.raises(api_mod.PopurCommandError, match="code -1"):
+        api.send_command("dev1", "reboot")
+
+
+def test_event_occured_is_not_a_reply(monkeypatch, caplog):
+    event = lambda topic, msg: ("devsrpc/event/dev1", {"id": msg["id"], "method": "event_occured",
+        "params": {"did": "0", "sid": 2, "eid": 1, "arguments": []}})
+    api = make_api(monkeypatch, reply=event)
+    api.send_command("dev1", "reboot")
+    assert "no reply" in caplog.text
+
+
+def test_commands_keep_a_minimum_gap(monkeypatch):
+    api = make_api(monkeypatch, reply=set_reply(0))
+    monkeypatch.setattr(api_mod, "COMMAND_GAP", 0.2)
+    times = []
+    publish = api._push.publish
+    api._push.publish = lambda topic, data: (times.append(time.monotonic()), publish(topic, data))[1]
+    api.set_property("dev1", 4, 1)
+    api.set_property("dev1", 13, 1)
+    assert times[1] - times[0] >= 0.19
+
+
+def test_replaced_write_is_not_sent(monkeypatch):
+    api = make_api(monkeypatch, reply=set_reply(0))
+    started, release = threading.Event(), threading.Event()
+    publish = api._push.publish
+
+    def slow_publish(topic, data):
+        started.set()
+        release.wait(1)
+        return publish(topic, data)
+
+    api._push.publish = slow_publish
+    first = threading.Thread(target=api.set_property, args=("dev1", 4, 1))
+    first.start()
+    started.wait(1)
+    # Two writes of pid 18 queue behind the first command: only the newest one is sent.
+    second = threading.Thread(target=api.set_property, args=("dev1", 18, 3))
+    second.start()
+    time.sleep(0.05)
+    third = threading.Thread(target=api.set_property, args=("dev1", 18, 7))
+    third.start()
+    time.sleep(0.05)
+    release.set()
+    for t in (first, second, third):
+        t.join(2)
+    values = [(m["params"][0]["pid"], m["params"][0]["value"]) for _, m in api._push.sent]
+    assert values == [(4, 1), (18, 7)]
