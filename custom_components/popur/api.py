@@ -254,6 +254,9 @@ class PopurApi:
         if cmd_type == "clean":
             topic = f"devcrpc/action/{device_id}"
             payload = {"id": msg_id, "method": "action", "from": "remote", "params": {"did": "0", "sid": 2, "aid": 1, "in": []}}
+        elif cmd_type == "reset_bin":
+            topic = f"devcrpc/action/{device_id}"
+            payload = {"id": msg_id, "method": "action", "from": "remote", "params": {"did": "0", "sid": 2, "aid": 2, "in": []}}
         elif cmd_type == "manual_mode":
             topic = f"devcrpc/attr/{device_id}"
             payload = {"id": msg_id, "method": "set_properties", "from": "remote", "params": [{"did": "0", "pid": 3, "sid": 2, "value": 1 if value else 0}]}

@@ -57,6 +57,15 @@ def test_clean_confirmed(monkeypatch):
     assert api._pending == {}
 
 
+def test_reset_bin_confirmed(monkeypatch):
+    api = make_api(monkeypatch, reply=action_reply(0))
+    api.send_command("dev1", "reset_bin")
+    topic, msg = api._push.sent[0]
+    assert topic == "devcrpc/action/dev1"
+    assert msg["method"] == "action" and msg["params"] == {"did": "0", "sid": 2, "aid": 2, "in": []}
+    assert api._pending == {}
+
+
 def test_manual_mode_confirmed(monkeypatch):
     api = make_api(monkeypatch, reply=set_reply(0))
     api.send_command("dev1", "manual_mode", True)

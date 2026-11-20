@@ -50,7 +50,7 @@ class PopurTotalCyclesSensor(PopurEntity, SensorEntity):
         self._attr_unique_id = f"{self._device_id}_total_cycles"
         self._attr_name = "Cycles Since Bin Emptied"
         self._attr_native_unit_of_measurement = "cycles"
-        # The device resets this counter only when the bin is emptied.
+        # The device resets this counter when a full bin is emptied, or on action aid 2 (Reset Bin Counter).
         self._attr_state_class = SensorStateClass.TOTAL_INCREASING
         self._attr_icon = "mdi:counter"
 
