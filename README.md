@@ -18,11 +18,21 @@ Since Popur does not provide a local API, this integration communicates with the
 *   **Multi-Device Support:** Automatically discovers all Popur X5 devices on your account.
 *   **Real-time Controls:**
     *   Trigger "Clean" cycle.
+    *   **Reset Bin Counter:** Same as the app's "bin emptied" button. Use it after you empty the bin before it is full: the device resets the counter by itself only when it empties a full bin.
     *   Toggle "Manual Mode" (used for Do Not Disturb/Night Mode).
 *   **Sensors:**
     *   **Bin Full:** Binary sensor indicating when the waste bin needs emptying.
     *   **Cycles:** Tracks the number of daily cleaning cycles (Recommendation: Use Home Assistant 'Utility Meter' Helpers to track daily usage locally, as the device's internal counters may reset based on China Standard Time.) 
+    *   **Cycles Since Bin Emptied:** Counter that resets when a full bin is emptied, or when you press Reset Bin Counter.
+    *   **Status:** Idle, cleaning or presence (a cat or a hand in the box). Push only.
+    *   **Presence:** Occupancy binary sensor from the status. Push only.
+*   **Settings:** Curious Cat, Do Not Disturb (on/off, start, end), Wait Time (2–30 minutes), Leveling Passes (2–5), Display mode. The integration sends one command at a time, at least 1 s apart.
+*   **Reboot** button.
+*   **Cleaning Done** event, with visit start and duration, cycle start and duration, and trigger (automatic, side button, app). Push only.
+*   **Firmware version** in the device info. Push only.
+*   All entities are unavailable while the device is offline.
 *   **Easy Setup:** Fully configurable via the Home Assistant UI (Config Flow). No YAML editing required for connection.
+*   **Icon** in the Home Assistant integration list (Home Assistant 2026.3 or later).
 
 ## 📥 Installation
 
@@ -54,7 +64,9 @@ Since Popur does not provide a local API, this integration communicates with the
 
 ## 🌙 Night Mode (Do Not Disturb) Automation
 
-To prevent the robot from cycling at night, you can use the "Manual Mode" switch. We recommend using a **Schedule Helper** combined with an automation.
+The device has its own Do Not Disturb setting. Use the **Do Not Disturb** switch and the **Do Not Disturb Start** and **Do Not Disturb End** times to set it.
+
+As an alternative, to prevent the robot from cycling at night, you can use the "Manual Mode" switch. We recommend using a **Schedule Helper** combined with an automation.
 
 ### 1. Create a Schedule
 Go to **Settings** > **Devices & Services** > **Helpers** > **Create Helper** > **Schedule**.

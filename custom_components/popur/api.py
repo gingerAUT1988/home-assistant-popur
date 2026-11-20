@@ -4,9 +4,42 @@ import requests
 import time
 import paho.mqtt.client as mqtt
 import ssl
+import itertools
 import logging
+import random
+import threading
 
 _LOGGER = logging.getLogger(__name__)
+
+# MQTT CONNACK reason codes for a rejected token: "Bad user name or password", "Not authorized".
+_AUTH_REFUSED = (134, 135)
+# Minimum seconds between two logins started by the MQTT reconnect logic.
+_RELOGIN_AFTER_AUTH_REFUSED = 60
+_RELOGIN_AFTER_OTHER_FAILURE = 15 * 60
+# Seconds to wait for the device's reply to a command.
+COMMAND_TIMEOUT = 5
+# Minimum seconds between two commands. A burst of commands makes the device stop answering and go offline.
+COMMAND_GAP = 1
+# False: a missing reply only logs a warning. Set to True when live tests show that the
+# device replies to our own action and set_properties commands.
+REQUIRE_COMMAND_REPLY = False
+
+
+class PopurCommandError(Exception):
+    """The command was not sent, or the device rejected it."""
+
+
+def _reply_code(payload):
+    """Return the result code of an action or set_properties reply, or None if it has none."""
+    params = payload.get("params")
+    if isinstance(params, dict):
+        params = [params]
+    if isinstance(params, list):
+        codes = [e.get("code") for e in params if isinstance(e, dict) and "code" in e]
+        if codes:
+            return next((c for c in codes if c != 0), 0)
+    return payload.get("code")
+
 
 class PopurApi:
     def __init__(self, email, password):
@@ -28,9 +61,23 @@ class PopurApi:
         self.token = None
         self.user_id = None
         self.home_id = None
+        self._push = None
+        self._login_lock = threading.Lock()
+        self._last_relogin = None
+        # The app uses small ids (2, 3, 4...). Start far above them so that replies do not mix.
+        self._ids = itertools.count(random.randint(100_000, 900_000))
+        self._pending = {}
+        self._pending_lock = threading.Lock()
+        self._command_lock = threading.RLock()
+        self._last_command = 0.0
+        self._latest_write = {}
 
     def login(self):
-        """Login to Popur Cloud"""
+        """Login to Popur Cloud. Thread-safe: the poll, commands and the MQTT thread can call it."""
+        with self._login_lock:
+            return self._login()
+
+    def _login(self):
         url = "https://cloud.popur.com.cn/uapi/auth"
         headers = {"Content-Type": "application/json", "User-Agent": "com.cloudapp.popur.app"}
         payload = {"param": self.email, "password": self.password_hash, "type": "2"}
@@ -85,36 +132,176 @@ class PopurApi:
                 "cycles": data.get('worknum', 0),
                 "total_cycles": data.get('lastworknum', 0),
                 "manual_mode": True if str(data.get('manualmode')) == "1" else False,
-                "online": True if str(data.get('isonline')) == "1" else False
+                "online": True if str(data.get('isonline')) == "1" else False,
+                "curious_cat": str(data.get('sound')) == "1",
+                "dnd": str(data.get('sleepmode')) == "1",
+                "wait_time": data.get('counttime'),
+                "leveling": data.get('cleanmode'),
+                "display": data.get('skinstate'),
+                "dnd_start": data.get('sleepstarttime'),
+                "dnd_end": data.get('sleependtime'),
             }
         except Exception as e:
             _LOGGER.error(f"Status fetch error: {e}")
             return None
 
-    def send_command(self, device_id, cmd_type, value=None):
-        """Send MQTT Command"""
-        if not self.token: self.login()
-        path = f"/mqtt?token={self.token}"
-        broker = "cloud.popur.com.cn"
-        
-        payload = {}
-        topic = ""
+    def start_push(self, device_ids, callback, on_connected=None, on_disconnected=None):
+        """Open the persistent MQTT connection.
 
+        callback(topic, payload), on_connected() and on_disconnected() run in the paho thread.
+        on_connected runs after each successful connect. on_disconnected runs after each
+        unexpected disconnect.
+        """
+        if not device_ids: return
+        if not self.token: self.login()
+        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, transport="websockets")
+        def use_token():
+            client.ws_set_options(path=f"/mqtt?token={self.token}", headers={"Sec-WebSocket-Protocol": "mqtt"})
+
+        use_token()
+        client.tls_set_context(context=ssl.create_default_context())
+        client.reconnect_delay_set(min_delay=1, max_delay=120)
+
+        def on_connect(client, userdata, flags, reason_code, properties):
+            if reason_code.is_failure:
+                _LOGGER.warning(f"Popur MQTT connect refused: {reason_code}")
+                if reason_code.value in _AUTH_REFUSED:
+                    renew_token(_RELOGIN_AFTER_AUTH_REFUSED)
+                return
+            for device_id in device_ids:
+                client.subscribe(f"+/+/{device_id}")
+            for device_id in device_ids:
+                # HTTP has no field for pid 2. Never read sid 1; keep the app's 5-pid batch (PROTOCOL.md 1.4, 2.4).
+                client.publish(f"devcrpc/attr/{device_id}", json.dumps({"id": next(self._ids), "method": "get_properties", "from": "remote",
+                    "params": [{"did": "0", "sid": 2, "pid": pid} for pid in (1, 2, 8, 11, 6)]}))
+                client.publish(f"devcrpc/info/{device_id}", json.dumps({"id": next(self._ids), "method": "aithingsIO.info", "from": "remote", "params": {}}))
+            if on_connected:
+                on_connected()
+
+        def renew_token(min_interval):
+            # Each login issues a new token. Do not log in on every reconnect try.
+            now = time.monotonic()
+            if self._last_relogin is not None and now - self._last_relogin < min_interval:
+                return
+            self._last_relogin = now
+            if self.login():
+                use_token()
+
+        def on_disconnect(client, userdata, flags, reason_code, properties):
+            if not reason_code.is_failure:
+                return  # stop_push() closed the connection.
+            if reason_code.value in _AUTH_REFUSED:
+                renew_token(_RELOGIN_AFTER_AUTH_REFUSED)
+            if on_disconnected:
+                on_disconnected()
+
+        def on_connect_fail(client, userdata):
+            # The cause is unknown here (network down or token rejected at the WebSocket handshake).
+            renew_token(_RELOGIN_AFTER_OTHER_FAILURE)
+
+        def on_message(client, userdata, msg):
+            try:
+                payload = json.loads(msg.payload)
+                self._handle_reply(msg.topic, payload)
+                callback(msg.topic, payload)
+            # RuntimeError: the event loop is closed during shutdown.
+            except (ValueError, RuntimeError):
+                pass
+
+        client.on_connect = on_connect
+        client.on_disconnect = on_disconnect
+        client.on_connect_fail = on_connect_fail
+        client.on_message = on_message
+        client.connect_async("cloud.popur.com.cn", 443, keepalive=30)
+        client.loop_start()
+        self._push = client
+
+    def stop_push(self):
+        """Close the MQTT connection and wait for the paho thread. Safe to call two times."""
+        client, self._push = self._push, None
+        if client:
+            client.disconnect()
+            client.loop_stop()
+
+    def _handle_reply(self, topic, payload):
+        """Record the result of a pending command. Runs in the paho thread."""
+        if not isinstance(payload, dict) or not topic.startswith(("devsrpc/action/", "devsrpc/attr/", "devsrpc/event/")):
+            return
+        if payload.get("method") not in ("action", "set_properties", "aithingsIO.reboot"):
+            return
+        with self._pending_lock:
+            pending = self._pending.get(payload.get("id"))
+        if pending is not None:
+            pending["code"] = _reply_code(payload)
+            pending["event"].set()
+
+    def send_command(self, device_id, cmd_type, value=None):
+        """Send one command at a time, at least COMMAND_GAP s apart. See _send_command."""
+        with self._command_lock:
+            time.sleep(max(0, self._last_command + COMMAND_GAP - time.monotonic()))
+            try:
+                return self._send_command(device_id, cmd_type, value)
+            finally:
+                self._last_command = time.monotonic()
+
+    def _send_command(self, device_id, cmd_type, value=None):
+        """Send a command on the push connection and wait for the device's reply.
+
+        Raises PopurCommandError when push is not connected, the publish fails, or the
+        device replies with an error code.
+        """
+        msg_id = next(self._ids)
         if cmd_type == "clean":
             topic = f"devcrpc/action/{device_id}"
-            payload = {"id": int(time.time()), "method": "action", "from": "remote", "params": {"did": "0", "sid": 2, "aid": 1, "in": []}}
+            payload = {"id": msg_id, "method": "action", "from": "remote", "params": {"did": "0", "sid": 2, "aid": 1, "in": []}}
+        elif cmd_type == "reset_bin":
+            topic = f"devcrpc/action/{device_id}"
+            payload = {"id": msg_id, "method": "action", "from": "remote", "params": {"did": "0", "sid": 2, "aid": 2, "in": []}}
         elif cmd_type == "manual_mode":
             topic = f"devcrpc/attr/{device_id}"
-            val = 1 if value else 0
-            payload = {"id": int(time.time()), "method": "set_properties", "from": "remote", "params": [{"did": "0", "pid": 3, "sid": 2, "value": val}]}
+            payload = {"id": msg_id, "method": "set_properties", "from": "remote", "params": [{"did": "0", "pid": 3, "sid": 2, "value": 1 if value else 0}]}
+        elif cmd_type == "set_property":
+            pid, value = value
+            topic = f"devcrpc/attr/{device_id}"
+            payload = {"id": msg_id, "method": "set_properties", "from": "remote", "params": [{"did": "0", "pid": pid, "sid": 2, "value": value}]}
+        elif cmd_type == "reboot":
+            topic = f"devcrpc/event/{device_id}"
+            payload = {"id": msg_id, "method": "aithingsIO.reboot", "from": "remote", "params": [{"did": "0"}]}
+        else:
+            raise ValueError(f"Unknown command: {cmd_type}")
 
+        push = self._push
+        if not push or not push.is_connected():
+            raise PopurCommandError("Not connected to the Popur cloud. Try again in a minute.")
+
+        pending = {"event": threading.Event(), "code": None}
+        with self._pending_lock:
+            self._pending[msg_id] = pending
         try:
-            client = mqtt.Client(transport="websockets")
-            client.ws_set_options(path=path, headers={"Sec-WebSocket-Protocol": "mqtt"})
-            client.tls_set_context(context=ssl.create_default_context())
-            client.connect(broker, 443, 60)
-            client.publish(topic, json.dumps(payload))
-            time.sleep(0.5) 
-            client.disconnect()
-        except Exception as e:
-            _LOGGER.error(f"MQTT Error: {e}")
+            if push.publish(topic, json.dumps(payload)).rc != mqtt.MQTT_ERR_SUCCESS:
+                raise PopurCommandError("Could not send the command to the Popur cloud.")
+            replied = pending["event"].wait(COMMAND_TIMEOUT)
+        finally:
+            with self._pending_lock:
+                self._pending.pop(msg_id, None)
+
+        if not replied:
+            if REQUIRE_COMMAND_REPLY:
+                raise PopurCommandError(f"The device did not answer the {cmd_type} command.")
+            _LOGGER.warning(f"Popur: no reply to {cmd_type} command id {msg_id} within {COMMAND_TIMEOUT} s")
+            return
+        if pending["code"] not in (0, None):
+            raise PopurCommandError(f"The device rejected the {cmd_type} command (code {pending['code']}).")
+        _LOGGER.debug(f"Popur: {cmd_type} command id {msg_id} confirmed")
+
+    def set_property(self, device_id, pid, value):
+        """Write one sid 2 property and wait for the device's reply. Raises PopurCommandError.
+
+        A write that a newer write of the same property replaces while it waits in the queue is not sent.
+        """
+        key, token = (device_id, pid), object()
+        self._latest_write[key] = token
+        with self._command_lock:
+            if self._latest_write.get(key) is not token:
+                return
+            self.send_command(device_id, "set_property", (pid, value))
